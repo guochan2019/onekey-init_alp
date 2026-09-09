@@ -2,10 +2,14 @@
 # ============================================================
 # onekey-init_alp — Alpine Linux 系统初始化脚本
 # 适用环境: Alpine Linux LXC (OpenRC)
-# 功能: 换源 + 系统更新 + 基础工具 + chrony + 系统参数/时区
-# 与 onekey-init (Debian 直装版) 功能一致, 平台层适配 apk/OpenRC/musl
-# 差异: 无 journald (busybox syslogd)、无 gai.conf (musl 默认 IPv4 优先)、无 exim、
-#       不装 nftables/不做网络调优 (容器非网关角色, 无流量转发需求; Debian 网关版才有)
+# 功能: 换源 + 系统更新 + 基础工具 + 时区
+# 与 onekey-init (Debian 直装版) 按容器角色裁剪, 平台层适配 apk/OpenRC/musl
+# 裁剪依据 (2026-09-09 实测/实证):
+#   - nftables/网络调优/BBR: 容器非网关角色, 无流量转发需求
+#   - chrony: LXC 共享宿主内核时钟, 无实际调钟权 → 时间同步归宿主
+#   - swappiness/vfs 写入: 宿主全局参数, LXC 内永不生效
+#   - unzip/wget/btop: unzip 由 mosdns_alp 自装; wget busybox 自带; btop 轻服务容器无监控需求
+#   - 无 journald/无 syslogd init/无 exim: 对应清理步骤整步无操作
 # ============================================================
 set -e
 
@@ -41,7 +45,7 @@ echo ""
 #   https://dl-cdn.alpinelinux.org/alpine/v3.22/main
 # 做法: 备份原文件 → 按原文件版本号重建为阿里镜像 main + community 两行
 REPOS_FILE="/etc/apk/repositories"
-info "=== 1/6 替换 apk 源为阿里镜像 ==="
+info "=== 1/3 替换 apk 源为阿里镜像 ==="
 cp "$REPOS_FILE" "${REPOS_FILE}.bak"
 info "  ✓ 已备份原文件: ${REPOS_FILE}.bak"
 
@@ -60,83 +64,27 @@ apk update
 info "  ✓ apk 源已就绪"
 
 # =================== 2. 系统更新 ===================
-info "=== 2/6 系统更新 ==="
+info "=== 2/3 系统更新 ==="
 apk upgrade
 info "  ✓ 系统已更新"
 
-# =================== 3. 安装基础工具 ===================
-# 与 Debian 版对齐: curl wget nano btop iproute2 sudo ca-certificates unzip cron chrony
-# 差异: cron → busybox crond (Alpine 内建, 稍后启用服务); tzdata 供时区设置;
-#       nftables 不装 (容器非网关角色, 无容器级防火墙需求)
-# 不装: git / vim / net-tools (与 Debian 版一致, 网关不需要)
-info "=== 3/6 安装基础工具 ==="
+# =================== 3. 安装基础工具 + 时区 ===================
+# 工具清单: curl(脚本 API 查询) nano(唯一编辑器) iproute2(网络诊断 ss/ip)
+#           sudo(用户指定保留) ca-certificates(https 必需) tzdata(时区)
+# 不装: git/vim/net-tools/btop/unzip/wget (unzip 由 mosdns_alp 自装, wget busybox 自带)
+# 不装: chrony (LXC 共享宿主时钟无调钟权, 时间同步归宿主)
+info "=== 3/3 安装基础工具 ==="
 apk add --no-cache -q \
-  curl wget nano \
-  btop \
-  iproute2 \
-  sudo ca-certificates \
-  unzip tzdata chrony
+  curl nano iproute2 sudo ca-certificates tzdata
 info "  ✓ 基础工具已安装"
 
-# =================== 4. 配置 chrony 时间同步 ===================
-# Alpine 无 systemd-timesyncd (busybox ntpd 默认未运行), 直接启用 chrony
-info "=== 4/6 配置时间同步 ==="
-rc-update add chronyd default 2>/dev/null || true
-rc-service chronyd start 2>/dev/null || warn "  chronyd 启动失败"
-sleep 1
-chronyc tracking 2>/dev/null | grep -E 'Stratum|System time' || true
-info "  ✓ chrony 时间同步已启动"
-
-# =================== 5. 系统参数调优 ===================
-info "=== 5/6 系统参数调优 ==="
-SYS_MARK="# onekey-init system tuning"
-if grep -qF "$SYS_MARK" /etc/sysctl.conf 2>/dev/null; then
-  info "  - 系统参数已存在, 跳过写入"
-else
-  cat >> /etc/sysctl.conf << 'SYSEOF'
-
-# onekey-init system tuning
-vm.swappiness = 10
-vm.vfs_cache_pressure = 50
-SYSEOF
-fi
-# vm.* 为宿主全局参数: LXC 内不可调属预期 (|| true 豁免 busybox ash 的 ERR trap; 写入保留, 物理机/特权容器生效)
-sysctl -w vm.swappiness=10 >/dev/null 2>&1 || true
-sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true
-if [ "$(cat /proc/sys/vm/swappiness 2>/dev/null)" = "10" ]; then
-  info "  ✓ swappiness=10 已生效"
-else
-  info "  - swappiness/vfs 为宿主全局参数, 容器内不可调属预期 (配置已写入, 物理机/特权容器生效)"
-fi
-
-# 设置时区 Asia/Shanghai (Alpine 无 timedatectl: 直接链接 zoneinfo, tzdata 已装)
+# 设置时区 Asia/Shanghai (Alpine 无 timedatectl: 直接链接 zoneinfo)
 if [ -f /usr/share/zoneinfo/Asia/Shanghai ]; then
   ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
   info "  ✓ 时区已设为 Asia/Shanghai"
 else
   warn "  tzdata 缺失, 时区未设置"
 fi
-info "  ✓ 系统参数已优化 (swappiness=10)"
-
-# =================== 6. 清理 ===================
-info "=== 6/6 清理 ==="
-# Alpine 无 journald: 日志由 busybox syslogd 管理 (/var/log/messages)
-# 启用 syslogd 并限制循环大小 (busybox syslogd -S 单位 KB; conf 惯例变量 SYSLOGD_OPTS)
-if [ -f /etc/init.d/syslogd ]; then
-  rc-update add syslogd default 2>/dev/null || true
-  rc-service syslogd start 2>/dev/null || true
-  # 写入循环上限 4MB (幂等追加; 若 init 脚本不支持该变量则静默无害, 仅不轮转)
-  grep -q '^SYSLOGD_OPTS=' /etc/conf.d/syslogd 2>/dev/null || echo 'SYSLOGD_OPTS="-S 4096"' >> /etc/conf.d/syslogd
-  # 配置改动需重启服务生效
-  rc-service syslogd restart 2>/dev/null || true
-  info "  ✓ syslogd 已启用 (循环上限 4MB, 配置 /etc/conf.d/syslogd)"
-else
-  info "  - 无 syslogd init 脚本, 跳过 (Alpine 无 journald, 服务日志各自落盘)"
-fi
-# Alpine 无 exim/MTA 依赖问题 (cron 不需要邮件传输)
-# 清理 apk 下载缓存 (对齐 autoclean)
-rm -rf /var/cache/apk/* 2>/dev/null || true
-info "  ✓ 清理完成 (apk 缓存已清)"
 
 # =================== 验证 ===================
 echo ""
@@ -144,7 +92,6 @@ info "========== 初始化完成 =========="
 echo ""
 echo "  $(grep -c processor /proc/cpuinfo 2>/dev/null) vCPU / $(free -h 2>/dev/null | awk '/^Mem:/{print $2}') RAM"
 echo "  内核: $(uname -r)"
-echo "  时间同步: $(chronyc tracking 2>/dev/null | grep -q Stratum && echo 'chrony ✓' || echo 'chrony')"
 echo "  时区: $(readlink /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##' || echo '未设置')"
 echo ""
 info "下一步：安装具体服务"
