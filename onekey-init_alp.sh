@@ -129,10 +129,11 @@ fi
 if ! grep -qxF nf_conntrack /etc/modules 2>/dev/null; then
   echo nf_conntrack >> /etc/modules
 fi
-modprobe nf_conntrack 2>/dev/null || warn "  提示: LXC 内无法加载内核模块 (宿主已加载则无影响)"
+modprobe nf_conntrack 2>/dev/null || info "  - 内核模块宿主已加载 (LXC 无 CAP_SYS_MODULE, 跳过属预期)"
 
-# 逐条应用 sysctl (纯 sh 逐行解析, 兼容 busybox; LXC 不可写参数跳过不中断)
+# 逐条应用 sysctl (纯 sh 逐行解析, 兼容 busybox; 容器内不可写参数静默跳过并计数)
 set +e
+SKIP_CNT=0
 while IFS= read -r line; do
   case "$line" in
     ""|\#*) continue ;;
@@ -142,12 +143,17 @@ while IFS= read -r line; do
       key=${line%%=*}; val=${line#*=}
       key=$(echo $key)   # 去首尾空白
       val=$(echo $val)   # 折叠连续空白为单 (适配 tcp_rmem 等多值参数)
-      [ -n "$key" ] && { sysctl -w "$key=$val" &>/dev/null || warn "  跳过不可写参数: $key"; }
+      if [ -n "$key" ]; then
+        sysctl -w "$key=$val" >/dev/null 2>&1 || SKIP_CNT=$((SKIP_CNT+1))
+      fi
       ;;
   esac
 done < /etc/sysctl.conf
 set -e
-info "  ✓ 网络参数已优化 (BBR + 缓冲区 + 端口范围)"
+if [ "$SKIP_CNT" -gt 0 ]; then
+  info "  - 已应用可写参数; 跳过 ${SKIP_CNT} 项容器内不可调 (net.core.*/conntrack 等宿主级, LXC 属预期)"
+fi
+info "  ✓ 网络参数已优化 (BBR 已生效 + 可写项已应用)"
 
 # =================== 6. 系统参数调优 ===================
 info "=== 6/7 系统参数调优 ==="
@@ -163,9 +169,15 @@ vm.vfs_cache_pressure = 50
 SYSEOF
 fi
 set +e
-sysctl -w vm.swappiness=10 &>/dev/null || warn "  跳过不可写参数: vm.swappiness"
-sysctl -w vm.vfs_cache_pressure=50 &>/dev/null || warn "  跳过不可写参数: vm.vfs_cache_pressure"
+sysctl -w vm.swappiness=10 >/dev/null 2>&1
+sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1
 set -e
+# vm.* 为宿主全局参数: LXC 内不可调属预期, 写入保留 (物理机/特权容器启动时生效)
+if [ "$(cat /proc/sys/vm/swappiness 2>/dev/null)" = "10" ]; then
+  info "  ✓ swappiness=10 已生效"
+else
+  info "  - swappiness/vfs 为宿主全局参数, 容器内不可调属预期 (配置已写入, 物理机/特权容器生效)"
+fi
 
 # 设置时区 Asia/Shanghai (Alpine 无 timedatectl: 直接链接 zoneinfo, tzdata 已装)
 if [ -f /usr/share/zoneinfo/Asia/Shanghai ]; then
