@@ -168,11 +168,9 @@ vm.swappiness = 10
 vm.vfs_cache_pressure = 50
 SYSEOF
 fi
-set +e
-sysctl -w vm.swappiness=10 >/dev/null 2>&1
-sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1
-set -e
-# vm.* 为宿主全局参数: LXC 内不可调属预期, 写入保留 (物理机/特权容器启动时生效)
+# vm.* 为宿主全局参数: LXC 内不可调属预期 (|| true 豁免 busybox ash 的 ERR trap; 写入保留, 物理机/特权容器生效)
+sysctl -w vm.swappiness=10 >/dev/null 2>&1 || true
+sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true
 if [ "$(cat /proc/sys/vm/swappiness 2>/dev/null)" = "10" ]; then
   info "  ✓ swappiness=10 已生效"
 else
