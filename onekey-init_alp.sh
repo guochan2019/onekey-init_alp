@@ -139,11 +139,21 @@ if ! grep -qxF nf_conntrack /etc/modules 2>/dev/null; then
 fi
 modprobe nf_conntrack 2>/dev/null || warn "  提示: LXC 内无法加载内核模块 (宿主已加载则无影响)"
 
-# 逐条应用 sysctl (set +e 避免 LXC 不可写参数导致失败; 仅取非注释键值行, 值内空格保留)
+# 逐条应用 sysctl (纯 sh 逐行解析, 兼容 busybox; LXC 不可写参数跳过不中断)
 set +e
-sed -n 's/^\([a-z][a-z0-9._]*\)[[:space:]]*=[[:space:]]*\([^#]*\)$\1=\2/p' /etc/sysctl.conf | while IFS='=' read -r key val; do
-  sysctl -w "$key=$val" &>/dev/null || warn "  跳过不可写参数: $key"
-done
+while IFS= read -r line; do
+  case "$line" in
+    ""|\#*) continue ;;
+  esac
+  case "$line" in
+    *=*)
+      key=${line%%=*}; val=${line#*=}
+      key=$(echo $key)   # 去首尾空白
+      val=$(echo $val)   # 折叠连续空白为单 (适配 tcp_rmem 等多值参数)
+      [ -n "$key" ] && { sysctl -w "$key=$val" &>/dev/null || warn "  跳过不可写参数: $key"; }
+      ;;
+  esac
+done < /etc/sysctl.conf
 set -e
 info "  ✓ 网络参数已优化 (BBR + 缓冲区 + 端口范围)"
 
