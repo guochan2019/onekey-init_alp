@@ -1,6 +1,6 @@
 # onekey-init_alp
 
-一键 **Alpine Linux 系统初始化**（换源 + 更新 + 基础工具 + nftables + chrony + 网络调优）。
+一键 **Alpine Linux 系统初始化**（换源 + 更新 + 基础工具 + chrony + 网络调优）。
 
 > 功能与 [onekey-init](https://github.com/guochan2019/onekey-init)（Debian 直装版）完全一致，平台层适配 **apk + OpenRC + musl**。
 
@@ -21,18 +21,17 @@ chmod +x onekey-init_alp.sh && ./onekey-init_alp.sh
 
 ---
 
-## 初始化流程（8 步）
+## 初始化流程（7 步）
 
 | 步骤 | 说明 |
 |------|------|
-| 1/8 | 替换 apk 源为阿里镜像（`/etc/apk/repositories` 备份 `.bak`，按原版本号重建 main + community 两行） |
-| 2/8 | 系统更新（`apk upgrade`） |
-| 3/8 | 安装基础工具：curl、wget、nano、btop、iproute2、nftables、sudo、ca-certificates、unzip、tzdata、chrony（**不装 git/vim/net-tools**） |
-| 4/8 | 启用 nftables（OpenRC，不写规则） |
-| 5/8 | chrony 时间同步（Alpine 无 systemd-timesyncd，直接启用 chronyd） |
-| 6/8 | 网络调优：BBR + 连接跟踪 + TIME_WAIT + 缓冲区 + 端口范围（写入 `/etc/sysctl.conf` 逐条应用） |
-| 7/8 | 系统参数（swappiness=10、vfs_cache_pressure=50）+ 时区 Asia/Shanghai |
-| 8/8 | 启用 syslogd 限日志循环 + 清理 apk 缓存 |
+| 1/7 | 替换 apk 源为阿里镜像（`/etc/apk/repositories` 备份 `.bak`，按原版本号重建 main + community 两行） |
+| 2/7 | 系统更新（`apk upgrade`） |
+| 3/7 | 安装基础工具：curl、wget、nano、btop、iproute2、sudo、ca-certificates、unzip、tzdata、chrony（**不装 git/vim/net-tools，不装 nftables**） |
+| 4/7 | chrony 时间同步（Alpine 无 systemd-timesyncd，直接启用 chronyd） |
+| 5/7 | 网络调优：BBR + 连接跟踪 + TIME_WAIT + 缓冲区 + 端口范围（写入 `/etc/sysctl.conf` 逐条应用） |
+| 6/7 | 系统参数（swappiness=10、vfs_cache_pressure=50）+ 时区 Asia/Shanghai |
+| 7/7 | 启用 syslogd 限日志循环 + 清理 apk 缓存 |
 
 ---
 
@@ -49,7 +48,7 @@ chmod +x onekey-init_alp.sh && ./onekey-init_alp.sh
 | 日志限制 | journald 50M（drop-in） | 无 journald；busybox syslogd + 循环上限（`/etc/conf.d/syslogd`） |
 | 邮件清理 | purge exim4 | Alpine 无 MTA 依赖问题，无对应项 |
 | 内核模块加载 | `/etc/modules-load.d/` | `/etc/modules`（openrc modules 服务） |
-| 防火墙 | nftables 服务 | nftables 包 OpenRC 服务（`/etc/nftables.nft`） |
+| 防火墙 | 启用 nftables 服务（网关角色） | **不装**：容器非网关角色，无容器级防火墙需求（曾误启导致 Alpine 包默认规则断网） |
 
 ---
 
