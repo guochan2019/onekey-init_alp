@@ -2,9 +2,10 @@
 # ============================================================
 # onekey-init_alp — Alpine Linux 系统初始化脚本
 # 适用环境: Alpine Linux LXC (OpenRC)
-# 功能: 换源 + 系统更新 + 基础工具 + nftables + chrony + 网络调优
+# 功能: 换源 + 系统更新 + 基础工具 + chrony + 网络调优
 # 与 onekey-init (Debian 直装版) 功能一致, 平台层适配 apk/OpenRC/musl
-# 差异: 无 journald (busybox syslogd)、无 gai.conf (musl 默认 IPv4 优先)、无 exim
+# 差异: 无 journald (busybox syslogd)、无 gai.conf (musl 默认 IPv4 优先)、无 exim、
+#       不装 nftables (Alpine 容器版非网关角色, 无容器级防火墙需求; Debian 网关版才有)
 # ============================================================
 set -e
 
@@ -40,7 +41,7 @@ echo ""
 #   https://dl-cdn.alpinelinux.org/alpine/v3.22/main
 # 做法: 备份原文件 → 按原文件版本号重建为阿里镜像 main + community 两行
 REPOS_FILE="/etc/apk/repositories"
-info "=== 1/8 替换 apk 源为阿里镜像 ==="
+info "=== 1/7 替换 apk 源为阿里镜像 ==="
 cp "$REPOS_FILE" "${REPOS_FILE}.bak"
 info "  ✓ 已备份原文件: ${REPOS_FILE}.bak"
 
@@ -59,44 +60,35 @@ apk update
 info "  ✓ apk 源已就绪"
 
 # =================== 2. 系统更新 ===================
-info "=== 2/8 系统更新 ==="
+info "=== 2/7 系统更新 ==="
 apk upgrade
 info "  ✓ 系统已更新"
 
 # =================== 3. 安装基础工具 ===================
-# 与 Debian 版对齐: curl wget nano btop iproute2 nftables sudo ca-certificates unzip cron chrony
-# 差异: cron → busybox crond (Alpine 内建, 稍后启用服务); tzdata 供时区设置
+# 与 Debian 版对齐: curl wget nano btop iproute2 sudo ca-certificates unzip cron chrony
+# 差异: cron → busybox crond (Alpine 内建, 稍后启用服务); tzdata 供时区设置;
+#       nftables 不装 (容器非网关角色, 无容器级防火墙需求)
 # 不装: git / vim / net-tools (与 Debian 版一致, 网关不需要)
-info "=== 3/8 安装基础工具 ==="
+info "=== 3/7 安装基础工具 ==="
 apk add --no-cache -q \
   curl wget nano \
   btop \
-  iproute2 nftables \
+  iproute2 \
   sudo ca-certificates \
   unzip tzdata chrony
 info "  ✓ 基础工具已安装"
 
-# =================== 4. 启用 nftables ===================
-info "=== 4/8 启用 nftables ==="
-# Alpine nftables 包 OpenRC 服务读 /etc/nftables.nft; 空规则兜底
-if [ ! -f /etc/nftables.nft ]; then
-  echo "flush ruleset" > /etc/nftables.nft
-fi
-rc-update add nftables default 2>/dev/null || true
-rc-service nftables start 2>/dev/null || warn "  nftables 启动失败 (检查 /etc/nftables.nft)"
-info "  ✓ nftables 已启用（未写规则，按需添加）"
-
-# =================== 5. 配置 chrony 时间同步 ===================
+# =================== 4. 配置 chrony 时间同步 ===================
 # Alpine 无 systemd-timesyncd (busybox ntpd 默认未运行), 直接启用 chrony
-info "=== 5/8 配置时间同步 ==="
+info "=== 4/7 配置时间同步 ==="
 rc-update add chronyd default 2>/dev/null || true
 rc-service chronyd start 2>/dev/null || warn "  chronyd 启动失败"
 sleep 1
 chronyc tracking 2>/dev/null | grep -E 'Stratum|System time' || true
 info "  ✓ chrony 时间同步已启动"
 
-# =================== 6. 网络性能调优 ===================
-info "=== 6/8 网络性能调优 ==="
+# =================== 5. 网络性能调优 ===================
+info "=== 5/7 网络性能调优 ==="
 # IPv4 优先: Debian(glibc) 用 /etc/gai.conf; Alpine(musl) 无 gai.conf,
 #   musl getaddrinfo 按 AF_INET → AF_INET6 顺序查询, 天然 IPv4 优先, 无需配置
 info "  ✓ IPv4 优先: musl 内建行为, 无需 gai.conf"
@@ -157,8 +149,8 @@ done < /etc/sysctl.conf
 set -e
 info "  ✓ 网络参数已优化 (BBR + 缓冲区 + 端口范围)"
 
-# =================== 7. 系统参数调优 ===================
-info "=== 7/8 系统参数调优 ==="
+# =================== 6. 系统参数调优 ===================
+info "=== 6/7 系统参数调优 ==="
 SYS_MARK="# onekey-init system tuning"
 if grep -qF "$SYS_MARK" /etc/sysctl.conf 2>/dev/null; then
   info "  - 系统参数已存在, 跳过写入"
@@ -184,8 +176,8 @@ else
 fi
 info "  ✓ 系统参数已优化 (swappiness=10)"
 
-# =================== 8. 清理 ===================
-info "=== 8/8 清理 ==="
+# =================== 7. 清理 ===================
+info "=== 7/7 清理 ==="
 # Alpine 无 journald: 日志由 busybox syslogd 管理 (/var/log/messages)
 # 启用 syslogd 并限制循环大小 (busybox syslogd -S 单位 KB; conf 惯例变量 SYSLOGD_OPTS)
 if [ -f /etc/init.d/syslogd ]; then
@@ -211,7 +203,6 @@ echo ""
 echo "  $(grep -c processor /proc/cpuinfo 2>/dev/null) vCPU / $(free -h 2>/dev/null | awk '/^Mem:/{print $2}') RAM"
 echo "  内核: $(uname -r)"
 echo "  拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo '默认')"
-echo "  防火墙: nftables ($(rc-service nftables status >/dev/null 2>&1 && echo '运行中' || echo '未运行'))"
 echo "  时间同步: $(chronyc tracking 2>/dev/null | grep -q Stratum && echo 'chrony ✓' || echo 'chrony')"
 echo "  时区: $(readlink /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##' || echo '未设置')"
 echo ""
